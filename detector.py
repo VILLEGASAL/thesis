@@ -30,7 +30,6 @@ class VideoReader:
 
     def read(self):
         with self.read_lock:
-            # We copy here to ensure the detection logic has a clean frame
             frame = self.frame.copy() if self.frame is not None else None
             grabbed = self.grabbed
         return grabbed, frame
@@ -43,13 +42,15 @@ class TrafficDetector(QObject):
 
     def __init__(self):
         super().__init__()
-        # Running YOLOv11n on Raspberry Pi 5
+        # Ensure the model file is named exactly 'yolo11n_ncnn_model' in your folder
         self.model = YOLO("./yolo11n_ncnn_model", task="detect")
         self.ZONE = [100, 80, 540, 400] 
         self.running = True
         self.active_street = "Street A"
         self.is_counting = True
         self.light_color = "DETECTING"
+        # COCO Vehicle Classes: 2: car, 3: motorcycle, 5: bus, 7: truck
+        self.vehicle_classes = [2, 3, 5, 7]
 
     def get_duration(self, count):
         if count == 1: return 5
@@ -58,7 +59,7 @@ class TrafficDetector(QObject):
         return 0 
 
     def process_street(self, frame, street_name, time_left):
-        cup_count = 0
+        vehicle_count = 0
         display_color = "RED" 
 
         if street_name == self.active_street:
@@ -68,16 +69,16 @@ class TrafficDetector(QObject):
                 cv2.rectangle(frame, (self.ZONE[0], self.ZONE[1]), (self.ZONE[2], self.ZONE[3]), (255, 255, 0), 2)
                 for r in results:
                     for box in r.boxes:
-                        if int(box.cls[0]) == 41: # Cup detection
+                        # Logic Change: Check if the detected object is a vehicle
+                        if int(box.cls[0]) in self.vehicle_classes:
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
                             if (x1 >= self.ZONE[0] and y1 >= self.ZONE[1] and x2 <= self.ZONE[2] and y2 <= self.ZONE[3]):
-                                cup_count += 1
+                                vehicle_count += 1
                                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
             elif self.light_color == "GREEN":
                 cv2.rectangle(frame, (self.ZONE[0], self.ZONE[1]), (self.ZONE[2], self.ZONE[3]), (0, 255, 0), 4)
             elif self.light_color == "YELLOW":
                 cv2.rectangle(frame, (self.ZONE[0], self.ZONE[1]), (self.ZONE[2], self.ZONE[3]), (0, 255, 255), 4)
 
-        # CRITICAL FIX: Emit a COPY of the frame to avoid memory conflicts
-        self.frame_ready.emit(frame.copy(), cup_count, street_name, display_color, time_left)
-        return cup_count
+        self.frame_ready.emit(frame.copy(), vehicle_count, street_name, display_color, time_left)
+        return vehicle_count
