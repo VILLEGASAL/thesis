@@ -6,7 +6,6 @@ import threading
 from gpiozero import DigitalOutputDevice
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel, 
                              QVBoxLayout, QHBoxLayout, QPushButton, QFrame, QGridLayout)
-# CRITICAL FIX: Added 'Signal' to the import list below
 from PySide6.QtCore import Qt, QThread, Slot, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QFont
 from detector import VideoReader, TrafficDetector 
@@ -16,12 +15,10 @@ A_GREEN, A_YELLOW, A_RED = DigitalOutputDevice(17), DigitalOutputDevice(27), Dig
 B_GREEN, B_YELLOW, B_RED = DigitalOutputDevice(5), DigitalOutputDevice(6), DigitalOutputDevice(13)
 
 class SerialThread(QThread):
-    # This now works because Signal is imported
     siren_signal = Signal()
 
     def run(self):
         try:
-            # Note: Verify if your Arduino is on /dev/ttyACM0
             ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=0.1)
             time.sleep(2) 
             while True:
@@ -84,13 +81,12 @@ class Worker(QThread):
                 if elapsed >= self.current_duration:
                     self.handle_transition()
             else:
-                # Emergency Mode active: Keep video moving but stop timers
                 ret_a, frame_a = self.cam_a.read()
                 ret_b, frame_b = self.cam_b.read()
                 if ret_a and frame_a is not None: self.detector.process_street(frame_a, "Street A", 0)
                 if ret_b and frame_b is not None: self.detector.process_street(frame_b, "Street B", 0)
             
-            self.msleep(60) # Frame-rate limiter for stability
+            self.msleep(60) 
 
     def handle_transition(self):
         if self.detector.is_counting:
@@ -131,6 +127,12 @@ class Dashboard(QMainWindow):
         self.detector.frame_ready.connect(self.update_ui)
         self.worker = Worker(self.detector); self.worker.start()
 
+        # FIXED: Watchdog setup
+        self.last_siren_time = 0
+        self.watchdog_timer = QTimer()
+        self.watchdog_timer.timeout.connect(self.check_emergency_timeout)
+        self.watchdog_timer.start(500) # Check every 0.5 seconds
+
         self.serial_thread = SerialThread()
         self.serial_thread.siren_signal.connect(self.activate_emergency)
         self.serial_thread.start()
@@ -147,16 +149,26 @@ class Dashboard(QMainWindow):
 
     @Slot()
     def activate_emergency(self):
+        # Update the timestamp whenever a signal is received
+        self.last_siren_time = time.time()
+        
         if not self.detector.emergency_mode:
             self.detector.emergency_mode = True
             self.title_label.setText("!!! EMERGENCY VEHICLE DETECTED - ALL RED !!!")
             self.title_label.setStyleSheet("color: #ff1744; font-weight: bold;")
-            QTimer.singleShot(7000, self.deactivate_emergency)
+
+    # NEW: Logic to auto-clear the emergency text
+    def check_emergency_timeout(self):
+        if self.detector.emergency_mode:
+            # If no siren signal received in the last 1.5 seconds
+            if time.time() - self.last_siren_time > 1.5:
+                self.deactivate_emergency()
 
     def deactivate_emergency(self):
         self.detector.emergency_mode = False
         self.title_label.setText("CCTV TRAFFIC MONITORING STATION")
         self.title_label.setStyleSheet("color: white;")
+        # Reset the timer so the light cycle restarts correctly
         self.worker.start_time = time.time()
 
     @Slot(object, int, str, str, int, bool)
@@ -187,5 +199,5 @@ class Dashboard(QMainWindow):
         event.accept()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = Dashboard(); window.show(); sys.exit(app.exec())
+    app = QApplication(sys.argv)                                
+    window = Dashboard(); window.show(); sys.exit(app.exec())                
