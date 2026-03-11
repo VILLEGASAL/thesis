@@ -10,9 +10,11 @@ from PySide6.QtCore import Qt, QThread, Slot, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QFont
 from detector import VideoReader, TrafficDetector 
 
-# GPIO SETUP
-A_GREEN, A_YELLOW, A_RED = DigitalOutputDevice(17), DigitalOutputDevice(27), DigitalOutputDevice(22)
-B_GREEN, B_YELLOW, B_RED = DigitalOutputDevice(5), DigitalOutputDevice(6), DigitalOutputDevice(13)
+# NEW GPIO SETUP: Using only 3 pins for the logic circuit
+# Pin 17 = A, Pin 27 = B, Pin 22 = C
+PIN_A = DigitalOutputDevice(17)
+PIN_B = DigitalOutputDevice(27)
+PIN_C = DigitalOutputDevice(22)
 
 class SerialThread(QThread):
     siren_signal = Signal()
@@ -40,24 +42,47 @@ class Worker(QThread):
         self.last_valid_count = 0
 
     def update_hardware(self):
+        """
+        Modified to follow the Logic Circuit Truth Table:
+        A B C | State
+        0 0 0 | Street A Green, Street B Red
+        0 0 1 | Street A Yellow, Street B Red
+        0 1 0 | Emergency / Detecting (All Red)
+        0 1 1 | Street A Red, Street B Green
+        1 0 0 | Street A Red, Street B Yellow
+        """
         try:
-            A_GREEN.off(); A_YELLOW.off(); A_RED.off()
-            B_GREEN.off(); B_YELLOW.off(); B_RED.off()
+            # Default all to 0
+            a, b, c = 0, 0, 0
 
-            if self.detector.emergency_mode:
-                A_RED.on(); B_RED.on()
-                return
-
-            if self.detector.light_color == "DETECTING":
-                A_RED.on(); B_RED.on()
+            # Emergency Mode or Detecting State (0 1 0)
+            if self.detector.emergency_mode or self.detector.light_color == "DETECTING":
+                a, b, c = 0, 1, 0
+            
+            # Street A Active
             elif self.detector.active_street == "Street A":
-                B_RED.on()
-                if self.detector.light_color == "GREEN": A_GREEN.on()
-                elif self.detector.light_color == "YELLOW": A_YELLOW.on()
-            else:
-                A_RED.on()
-                if self.detector.light_color == "GREEN": B_GREEN.on()
-                elif self.detector.light_color == "YELLOW": B_YELLOW.on()
+                if self.detector.light_color == "GREEN":
+                    a, b, c = 0, 0, 0
+                elif self.detector.light_color == "YELLOW":
+                    a, b, c = 0, 0, 1
+            
+            # Street B Active
+            elif self.detector.active_street == "Street B":
+                if self.detector.light_color == "GREEN":
+                    a, b, c = 0, 1, 1
+                elif self.detector.light_color == "YELLOW":
+                    a, b, c = 1, 0, 0
+
+            # Write the binary state to the 3 GPIO pins
+            if a: PIN_A.on()
+            else: PIN_A.off()
+            
+            if b: PIN_B.on()
+            else: PIN_B.off()
+            
+            if c: PIN_C.on()
+            else: PIN_C.off()
+
         except: pass
 
     def run(self):
@@ -127,11 +152,10 @@ class Dashboard(QMainWindow):
         self.detector.frame_ready.connect(self.update_ui)
         self.worker = Worker(self.detector); self.worker.start()
 
-        # FIXED: Watchdog setup
         self.last_siren_time = 0
         self.watchdog_timer = QTimer()
         self.watchdog_timer.timeout.connect(self.check_emergency_timeout)
-        self.watchdog_timer.start(500) # Check every 0.5 seconds
+        self.watchdog_timer.start(500)
 
         self.serial_thread = SerialThread()
         self.serial_thread.siren_signal.connect(self.activate_emergency)
@@ -149,18 +173,14 @@ class Dashboard(QMainWindow):
 
     @Slot()
     def activate_emergency(self):
-        # Update the timestamp whenever a signal is received
         self.last_siren_time = time.time()
-        
         if not self.detector.emergency_mode:
             self.detector.emergency_mode = True
             self.title_label.setText("!!! EMERGENCY VEHICLE DETECTED - ALL RED !!!")
             self.title_label.setStyleSheet("color: #ff1744; font-weight: bold;")
 
-    # NEW: Logic to auto-clear the emergency text
     def check_emergency_timeout(self):
         if self.detector.emergency_mode:
-            # If no siren signal received in the last 1.5 seconds
             if time.time() - self.last_siren_time > 1.5:
                 self.deactivate_emergency()
 
@@ -168,7 +188,6 @@ class Dashboard(QMainWindow):
         self.detector.emergency_mode = False
         self.title_label.setText("CCTV TRAFFIC MONITORING STATION")
         self.title_label.setStyleSheet("color: white;")
-        # Reset the timer so the light cycle restarts correctly
         self.worker.start_time = time.time()
 
     @Slot(object, int, str, str, int, bool)
@@ -200,4 +219,4 @@ class Dashboard(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)                                
-    window = Dashboard(); window.show(); sys.exit(app.exec())                
+    window = Dashboard(); window.show(); sys.exit(app.exec())
