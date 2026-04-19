@@ -12,6 +12,7 @@ dependencies = [
     "ncnn>=1.0.20260114",
     "opencv-python>=4.13.0.92",
     "pnnx>=20260112",
+    "pyinstaller>=6.19.0",
     "pyserial>=3.5",
     "pyside6>=6.10.2",
     "rpi-lgpio>=0.6",
